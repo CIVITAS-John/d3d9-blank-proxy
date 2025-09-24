@@ -1,4 +1,37 @@
 #include <windows.h>
+#include "kiero.h"
+#include <d3d11.h>
+#include <assert.h>
+
+typedef long(__stdcall* Present)(IDXGISwapChain*, UINT, UINT);
+static Present oPresent = NULL;
+
+void sleep() {
+	Sleep(200);
+}
+
+long __stdcall hkPresent11(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
+{
+	sleep();
+	return oPresent(pSwapChain, SyncInterval, Flags);
+}
+
+int kieroExampleThread()
+{
+	int status = -1; 
+	while (status != 0) {
+		Sleep(1000);
+		status = kiero::init(kiero::RenderType::D3D11);
+	}
+
+	int bindStatus = -1;
+	while (bindStatus != 0) {
+		Sleep(1000);
+		bindStatus = kiero::bind(8, (void**)&oPresent, hkPresent11);
+	}
+
+	return 1;
+}
 
 struct d3d9_dll { 
 	HMODULE dll;
@@ -64,6 +97,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 		d3d9.OrignalPSGPError = GetProcAddress(d3d9.dll, "PSGPError");
 		d3d9.OrignalPSGPSampleTexture = GetProcAddress(d3d9.dll, "PSGPSampleTexture");
 
+		CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)kieroExampleThread, NULL, 0, NULL);
 		break;
 	}
 	case DLL_PROCESS_DETACH:
