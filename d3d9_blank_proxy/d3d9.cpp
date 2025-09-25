@@ -2,12 +2,20 @@
 #include "kiero.h"
 #include <d3d11.h>
 #include <assert.h>
+#include <atomic>
+#include <chrono>
 
 typedef long(__stdcall* Present)(IDXGISwapChain*, UINT, UINT);
 static Present oPresent = NULL;
 
+static std::atomic<std::chrono::steady_clock::time_point> lastPresentTime;
+static std::atomic<bool> isExiting(false);
+
 long __stdcall presentHook(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 {
+	// Record the last time this hook was called
+	lastPresentTime.store(std::chrono::steady_clock::now());
+
 	// False rendering - max out at 30fps
 	Sleep(33);
 	return S_OK;
@@ -16,18 +24,40 @@ long __stdcall presentHook(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT F
 
 int hookMonitor()
 {
-	int status = -1; 
-	while (status != 0) {
+	// Initialize last present time
+	lastPresentTime.store(std::chrono::steady_clock::now());
+
+	// Hook initialization
+	int status = -1;
+	while (status != 0 && !isExiting) {
 		Sleep(1000);
 		status = kiero::init(kiero::RenderType::D3D11);
 	}
 
 	int bindStatus = -1;
-	while (bindStatus != 0) {
+	while (bindStatus != 0 && !isExiting) {
 		Sleep(1000);
 		bindStatus = kiero::bind(8, (void**)&oPresent, presentHook);
 	}
 
+	// Monitor loop - check if presentHook hasn't been called for 1 minute
+	while (!isExiting) {
+		Sleep(1000); // Check every second
+
+		auto now = std::chrono::steady_clock::now();
+		auto lastTime = lastPresentTime.load();
+		auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastTime).count();
+
+		// If presentHook hasn't been called for 120 seconds, kill the process
+		if (elapsed >= 120) {
+			// Log the timeout for debugging if needed
+			OutputDebugStringA("PresentHook timeout detected - terminating process\n");
+			ExitProcess(0);
+		}
+	}
+
+	// Application is exiting normally
+	OutputDebugStringA("Application exiting normally\n");
 	return 1;
 }
 
@@ -100,6 +130,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 	}
 	case DLL_PROCESS_DETACH:
 	{
+		// Signal the monitor thread that we're exiting
+		isExiting.store(true);
 		FreeLibrary(d3d9.dll);
 	}
 	break;
