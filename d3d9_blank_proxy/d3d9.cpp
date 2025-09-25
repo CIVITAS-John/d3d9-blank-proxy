@@ -6,17 +6,15 @@
 typedef long(__stdcall* Present)(IDXGISwapChain*, UINT, UINT);
 static Present oPresent = NULL;
 
-void sleep() {
-	Sleep(200);
-}
-
-long __stdcall hkPresent11(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
+long __stdcall presentHook(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 {
-	sleep();
-	return oPresent(pSwapChain, SyncInterval, Flags);
+	// False rendering - max out at 30fps
+	Sleep(33);
+	return S_OK;
+	// return oPresent(pSwapChain, SyncInterval, Flags);
 }
 
-int kieroExampleThread()
+int hookMonitor()
 {
 	int status = -1; 
 	while (status != 0) {
@@ -27,7 +25,7 @@ int kieroExampleThread()
 	int bindStatus = -1;
 	while (bindStatus != 0) {
 		Sleep(1000);
-		bindStatus = kiero::bind(8, (void**)&oPresent, hkPresent11);
+		bindStatus = kiero::bind(8, (void**)&oPresent, presentHook);
 	}
 
 	return 1;
@@ -97,7 +95,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 		d3d9.OrignalPSGPError = GetProcAddress(d3d9.dll, "PSGPError");
 		d3d9.OrignalPSGPSampleTexture = GetProcAddress(d3d9.dll, "PSGPSampleTexture");
 
-		CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)kieroExampleThread, NULL, 0, NULL);
+		CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)hookMonitor, NULL, 0, NULL);
 		break;
 	}
 	case DLL_PROCESS_DETACH:
