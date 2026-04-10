@@ -10,16 +10,45 @@ static Present oPresent = NULL;
 
 static std::atomic<std::chrono::steady_clock::time_point> lastPresentTime;
 static std::atomic<bool> isExiting(false);
+static std::atomic<bool> renderingEnabled(false);
+static bool wasBackspacePressed = false;
 
 long __stdcall presentHook(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 {
 	// Record the last time this hook was called
 	lastPresentTime.store(std::chrono::steady_clock::now());
 
-	// False rendering - max out at 30fps
+	// Check for Backspace key press (VK_BACK = 0x08) only when window is in foreground
+	bool isBackspacePressed = false;
+	if ((GetAsyncKeyState(VK_BACK) & 0x8000) != 0) {
+		HWND foregroundWindow = GetForegroundWindow();
+		if (foregroundWindow != NULL) {
+			// Get the process ID of the foreground window
+			DWORD foregroundProcessId;
+			GetWindowThreadProcessId(foregroundWindow, &foregroundProcessId);
+
+			// Only check for backspace if our process owns the foreground window
+			if (foregroundProcessId == GetCurrentProcessId()) {
+				isBackspacePressed = true;
+			}
+		}
+	}
+
+	// Toggle rendering on key press (not key hold)
+	if (isBackspacePressed && !wasBackspacePressed) {
+		renderingEnabled.store(!renderingEnabled.load());
+		OutputDebugStringA(renderingEnabled.load() ? "Rendering ENABLED\n" : "Rendering DISABLED\n");
+	}
+	wasBackspacePressed = isBackspacePressed;
+
+	// If rendering is enabled, pass through to original function
+	if (renderingEnabled.load()) {
+		return oPresent(pSwapChain, SyncInterval, Flags);
+	}
+
+	// False rendering - max out at 30fps when disabled
 	Sleep(33);
 	return S_OK;
-	// return oPresent(pSwapChain, SyncInterval, Flags);
 }
 
 int hookMonitor()
@@ -48,8 +77,8 @@ int hookMonitor()
 		auto lastTime = lastPresentTime.load();
 		auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastTime).count();
 
-		// If presentHook hasn't been called for 120 seconds, kill the process
-		if (elapsed >= 120) {
+		// If presentHook hasn't been called for 300 seconds, kill the process
+		if (elapsed >= 300) {
 			// Log the timeout for debugging if needed
 			OutputDebugStringA("PresentHook timeout detected - terminating process\n");
 			ExitProcess(0);
