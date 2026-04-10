@@ -1,9 +1,12 @@
 #include <windows.h>
 #include "kiero.h"
 #include <d3d11.h>
+#include <dxgi.h>
 #include <assert.h>
 #include <atomic>
 #include <chrono>
+
+#include "audio_keepalive.h"
 
 typedef long(__stdcall* Present)(IDXGISwapChain*, UINT, UINT);
 static Present oPresent = NULL;
@@ -13,10 +16,27 @@ static std::atomic<bool> isExiting(false);
 static std::atomic<bool> renderingEnabled(false);
 static bool wasBackspacePressed = false;
 
+// Set once in DLL_PROCESS_ATTACH from the VOX_DEORUM_PRODUCTION env var.
+// True only when the variable equals exactly "1".
+static bool g_productionMode = false;
+
 long __stdcall presentHook(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 {
 	// Record the last time this hook was called
 	lastPresentTime.store(std::chrono::steady_clock::now());
+
+	// Production mode: lazily install the audio-keepalive subclass + user32
+	// hooks on the very first Present, once we have a real swap chain HWND.
+	if (g_productionMode) {
+		static std::atomic<bool> audioInstallAttempted(false);
+		bool expected = false;
+		if (audioInstallAttempted.compare_exchange_strong(expected, true)) {
+			DXGI_SWAP_CHAIN_DESC desc = {};
+			if (SUCCEEDED(pSwapChain->GetDesc(&desc)) && desc.OutputWindow) {
+				AudioKeepalive_Install(desc.OutputWindow);
+			}
+		}
+	}
 
 	// Check for Backspace key press (VK_BACK = 0x08) only when window is in foreground
 	bool isBackspacePressed = false;
@@ -41,8 +61,9 @@ long __stdcall presentHook(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT F
 	}
 	wasBackspacePressed = isBackspacePressed;
 
-	// If rendering is enabled, pass through to original function
-	if (renderingEnabled.load()) {
+	// In production mode the game must render normally so OBS game-capture
+	// can pick up real frames. Otherwise honour the Backspace toggle.
+	if (g_productionMode || renderingEnabled.load()) {
 		return oPresent(pSwapChain, SyncInterval, Flags);
 	}
 
@@ -131,6 +152,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 	{
 	case DLL_PROCESS_ATTACH:
 	{
+		// Read VOX_DEORUM_PRODUCTION exactly once. Only the literal "1"
+		// counts; unset, empty, "0", "true", or anything else falls through
+		// to non-production (today's behavior).
+		wchar_t modeBuf[8] = { 0 };
+		DWORD modeLen = GetEnvironmentVariableW(L"VOX_DEORUM_PRODUCTION",
+			modeBuf, _countof(modeBuf));
+		g_productionMode = (modeLen == 1 && modeBuf[0] == L'1');
+		OutputDebugStringA(g_productionMode
+			? "VOX_DEORUM_PRODUCTION=1 -> production mode\n"
+			: "Non-production mode (default)\n");
+
 		CopyMemory(path + GetSystemDirectory(path, MAX_PATH - 10), "\\d3d9.dll", 11);
 		d3d9.dll = LoadLibrary(path);
 		if (NULL == d3d9.dll)
@@ -159,6 +191,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 	}
 	case DLL_PROCESS_DETACH:
 	{
+		// Tear down the audio-keepalive subclass + user32 hooks. No-op
+		// when not installed (non-production mode or first Present never
+		// happened).
+		AudioKeepalive_Uninstall();
+
 		// Signal the monitor thread that we're exiting
 		isExiting.store(true);
 		FreeLibrary(d3d9.dll);

@@ -11,6 +11,9 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="audio_keepalive.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="d3d9.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -34,6 +37,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="audio_keepalive.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
     <ClInclude Include="kiero.h">
       <Filter>Source Files</Filter>
     </ClInclude>
